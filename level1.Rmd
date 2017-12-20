@@ -1,0 +1,117 @@
+---
+output: html_document
+---
+
+The method below utilizes the ideas from: “Discovering latent association structure via Bayesian one-mode projection of temporal bipartite graphs.”  
+<br>
+The first level of the model generates a latent association graph, G, on the items.  
+<br>
+A related problem is the one-mode projection of a bipartite network. In this operation, a bipartite network $G=\{U,V,E\}$, described by the $N\times K$ incidence matrix B is mapped to a graph with only one class of nodes, ${{G}_{U}}=\{V,{{E}_{U}}\}$ via $B:N\times K\to W:N\times N$. The new connections are placed between the nodes of a set U based on the way they linked to the “vanished” set V. In our case, the set U consists of the items and the set V consists of transactions. We seek to generate an association graph on the items such that only statistically significant associations are present.  
+<br>
+Consider the $N\times K$incidence matrix B that represents our data:  
+<br>
+
+$B=\left( \begin{matrix}
+   1(\text{item 1}\in \text{transaction 1}) & \cdots  & 1(\text{item 1}\in \text{transaction K})  \\
+   \vdots  & \ddots  & \vdots   \\
+   1(\text{item N}\in \text{transaction 1}) & \cdots  & 1(\text{item N}\in \text{transaction K})  \\
+\end{matrix} \right)$ 
+
+<br>
+Now define a new variable ${{x}_{ij}}$ that we can refer to as the “opportunities,” which is the number of transaction that either item I or item j link to. This can be obtained by performing an element-wise logical disjunction on the rows of B and summing the elements of the resulting vector: ${{x}_{ij}}=\sum\limits_{k=1}^{K}{OR({{b}_{ik,}}{{b}_{jk}})}$.  
+
+<br>
+From the B, we can obtain the co-occurrence matrix via 
+<br>
+
+$W=B{{B}^{T}}=\left( \begin{matrix}
+   \sum\limits_{k=1}^{K}{1(\text{item 1}\in \text{transaction k})} & \cdots  & \sum\limits_{k=1}^{K}{1(\text{item 1 }\cap \text{ item N}\in \text{transaction k})}  \\
+   \vdots  & \ddots  & \vdots   \\
+   \sum\limits_{k=1}^{K}{1(\text{item N }\cap \text{ item 1}\in \text{transaction k})} & \cdots  & \sum\limits_{k=1}^{K}{1(\text{item N}\in \text{transaction k})}  \\
+\end{matrix} \right)$ 
+<br>
+
+We can model each ${{w}_{ij}}\sim \text{binomial(}{{x}_{ij}},{{\pi }_{ij}}\text{)}$. We aim to infer the parameters ${{\pi }_{ij}}$ for all pairs $i,j$.  
+<br>
+We take a Bayesian approach and place a Beta distribution prior for each parameter. That is, ${{\pi }_{ij}}\sim \text{beta(}{{\alpha }_{ij}},{{\beta }_{ij}}\text{)}$.  Thus, can easily obtain the posterior as: $P({{\pi }_{ij}}|{{w}_{ij}},{{x}_{ij}})=\text{beta(}{{\alpha }_{ij}}+{{w}_{ij}},{{\beta }_{ij}}+{{x}_{ij}}-{{w}_{ij}}\text{)}$
+<br>
+
+#### Test
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(knitr)
+
+# generate item pmf
+nItems = 20
+nSets = 5
+prandom = 0.1
+
+set.seed(3)
+lengths = rpois(nSets, lambda = 2) + 1 # length of the 5 itemsets 
+
+itemsets = vector("list", nSets)
+for (i in seq_along(itemsets)) {itemsets[[i]]=sample(nItems,lengths[i])}
+P_z = runif(nSets)
+P_z = c((P_z/sum(P_z)) * (1-prandom), prandom)
+
+### manipuate to render 
+items = c(sapply(itemsets, function(x) paste("item", x,collapse=" ")) , "random")
+item_pmf = as.data.frame(cbind(items,round(P_z,2)))
+names(item_pmf) = c("Z = itemsets", "P(Z=z)")
+kable(item_pmf)
+
+```
+
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# simulate transactions from itemset PMF
+nTrans = 200
+
+B = array(0,dim=c(nTrans,nItems))
+
+for (i in 1:nTrans) {
+  j = rpois(1,1)+1 # how many itemsets does the transaction contain (add one to avoid empty transactions)
+  k = findInterval(runif(j), cumsum(P_z)) + 1 # which itemsets
+  if((nSets+1) %in% k) {itemsets[nSets+1] = sample(nItems,rpois(1,1)+1)} # if trans contains a random set, generate it
+  B[i,unlist(itemsets[k])] = 1
+}
+
+B = t(B)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# generate 'PI' upper triangular matrix of attractions 
+PI = array(0, dim = c(nItems, nItems))
+alpha = 1;
+beta = 1;
+
+for (i in 1:(nItems-1)) {
+  for (j in (i+1):nItems) {
+    den = sum(ifelse(B[i,]+B[j,] > 0, 1, 0))
+    if (den == 0) {PI[i,j] = 0
+    } else {PI[i,j] = (B[i,] %*% B[j,]) / sum(ifelse(B[i,]+B[j,] > 0, 1, 0))}
+  }
+}
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# generate a graph from attraction matrix
+library(igraph)
+
+threshold = 0.4
+
+edges <- c()
+for (i in 1:(nItems-1)) {
+  for (j in (i+1):nItems) {
+    if (PI[i,j] > threshold)
+      edges <- c(edges, i, j)
+  }
+}
+g <- make_empty_graph(nItems, directed = FALSE) %>% add_edges(edges)
+plot(g)
+
+```
+
+
+
